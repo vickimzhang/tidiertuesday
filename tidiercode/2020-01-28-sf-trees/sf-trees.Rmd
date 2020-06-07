@@ -1,0 +1,151 @@
+---
+title: "San Francisco Trees"
+output: html_notebook
+- "Vicki M. Zhang"
+- "TidyTuesdays (Jan 28th, 2020)"
+date: "June 1, 2020"
+output: 
+   html_document:
+      toc: true
+      toc_depth: 4
+      toc_float: true
+      df_print: paged
+      code_folding: show
+---
+# Set Up
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE)
+```
+
+```{r packages}
+# library(tidyverse)
+```
+
+ 
+```{r data}
+# sf_trees <- readr::read_csv('https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2020/2020-01-28/sf_trees.csv')
+```
+
+# Introduction
+
+The data set contains information on tree species, their locations (address, latitude, and longitude), the date it was planted, some of it's measurements, and other variables. Some of the data is missing (obviously).
+
+```{r}
+glimpse(sf_trees)
+sf_trees
+```
+
+
+
+
+# Cleaning: Removing NAs
+
+In a new data frame `trees`, I remove first removed `tree_id` (a unique identifier).
+
+```{r}
+trees <- sf_trees %>% 
+  select(-tree_id) 
+```
+
+## Missing Species
+
+There are 192,987 trees of 571 species. Some of them are hybrids (e.g., Acer x), some are locally adapted (e.g., *Prunus cerasifera* and *Prunus serrulata* types), some are missing genus and/or family names. It appears that subspecies are mostly grouped together. There is a whole group of `Tree(s)::` and `::` that must have not been identified.
+
+```{r}
+nrow(trees)
+trees %>% 
+  group_by(species) %>%
+  tally()
+```
+
+The `species` variable is pretty complicated and messy. First, I remove all the cases where there was no species recorded. I am sorry to exclude those trees but if we don't know the species, the observation is not useful to us at all. This leaves us with 179,519 trees of 569 species.
+
+```{r}
+trees <- trees %>% 
+  filter(species != "::" & species != "Tree(s) ::")
+```
+
+
+## Missing Location
+
+The variables for location are gross. Looking at the combination of `address`, `latitude` and `longitude` variables, there is some redundancy. The variable `address` is not as accurate as the combination of `latitude` and `longitude`. However, there are also some trees that only have an address and no lat/long. After a long period of pondering, I decided to remove all instances of missing `latitude` and `longitude` and get rid of the `address` variable altogether. I could supplement missing lat/long accessions using Google Earth but it would not be accurate. Is there even a package that can retrieve lat/long given an address input? 
+
+```{r}
+trees %>% 
+  group_by(address, latitude, longitude) %>% 
+  tally()
+```
+
+First, I checked up on the observations that do not have `address`, `latitude` or `longitude`. There were 1566 individual trees. I had to make them leaf (ha).
+
+```{r}
+trees <- trees %>% 
+  select(-address) %>% 
+  filter(!is.na(latitude)) %>% 
+  filter(!is.na(longitude))
+```
+
+
+## Missing tree measurements
+
+Okay, now removing missing tree measurements. Trees were measured using the variable `dbh`, which measured the diameter of the tree at breast height.
+
+```{r}
+trees <- trees %>%
+  filter(!is.na(dbh))
+```
+
+
+## Other missing data
+
+What about `legal_status`, `plot_size` or `site_info`? Are there any missing observations here? These variables might not be useful for our analyses, so let's remove the `site_info` variable, and let's remove the individuals with missing `legal_status` and `plot_size.
+
+```{r}
+trees <- trees %>% 
+  filter(!is.na(legal_status)) %>% 
+  filter(!is.na(plot_size)) %>% 
+  select(-site_info)
+```
+
+
+## Cleaning Variables
+
+There are several messy columns that will probably cause me quite a bit of grief. First is the `species` column.
+
+```{r}
+trees %>% 
+  group_by(species) %>% 
+  tally()
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

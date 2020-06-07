@@ -1,0 +1,248 @@
+---
+title: "San Francisco Trees"
+output: html_notebook
+- "Vicki M. Zhang"
+- "TidyTuesdays (Jan 28th, 2020)"
+date: "June 2, 2020"
+output: 
+   html_document:
+      toc: true
+      toc_depth: 4
+      toc_float: true
+      df_print: paged
+      code_folding: show
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE)
+```
+
+
+# Introduction
+
+I learn more stats!
+
+This [data set](https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2020/2020-01-28/sf_trees.csv) contains information on tree species, their locations (address, latitude, and longitude), the date it was planted, some of it's measurements, and other variables. Some of the data is missing (obviously). I really like this data set because it's huge, it's messy, and it models trees! 
+
+```{r packages}
+library(tidyverse)
+library(tidymodels)
+library(workflows)
+```
+ 
+```{r data}
+# sf_trees <- readr::read_csv('https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2020/2020-01-28/sf_trees.csv')
+```
+
+I followed Julia Silge's tutorial [Tuning random forest hyperparameters with #TidyTuesday trees data](https://juliasilge.com/blog/sf-trees-random-tuning/). Here, I am replicating most of the modeling code to learn how to create a random forest model (which I have read about but never built), in addition to exploring large data sets. The goal here is to familiarize myself with the method and statistics so that I know how to use it in the future.
+
+Random Forests is a machine learning process, based on generating a large number of decision trees, each constructed using a different subset of the training data, selected by random sampling and with replacement. Then, the decision trees are used to identify the most common output.
+
+Goal: build a model to predict which trees are maintained by the San Francisco Department of Public Works, and which are not.
+
+# Explore the data
+
+There are a lot of variables, and the data ain't clean.
+
+```{r}
+glimpse(sf_trees)
+sf_trees
+```
+## Clean
+
+First, mutate the variables. Code all cases where `legal_status` is not "DPW Maintained" as "Other". Then, use `parse_number()` to get a rough estimate of the size of the plot from the `plot_size` column.
+
+Next, remove the `address` variable (redundant info as there is also the more accurate lat/long), and remove all NAs.
+
+Finally, change all character variables to factor.
+
+```{r}
+trees <- sf_trees %>% 
+  mutate(
+    
+    # mutate so that `legal_status` is either "DPW Maintained" or "Other"
+    legal_status = case_when(
+      legal_status == "DPW Maintained" ~ legal_status,
+      TRUE ~ "Other"
+    ),
+    
+    # parse the `plot_size` to a number
+    plot_size = parse_number(plot_size)
+  ) %>% 
+  
+  # remove address
+  select(-address) %>% 
+  
+  # remove NAs
+  na.omit() %>% 
+  
+  # character to factor
+  mutate_if(is.character, factor)
+```
+
+## Exploratory Data Analysis
+
+How are the trees distributed across San Fran? This is cool - you can plot `latitude` and `longitude` without needing to draw it over a map. Obviously it is  missing some attributes (e.g., scale), but it does give a brief visualization and shows obvious streets.
+
+```{r}
+trees %>% 
+  ggplot(aes(x = longitude, y = latitude, colour = legal_status)) + 
+  geom_point(size = 0.5, alpha = 0.4) +
+  labs(colour = NULL) + # remove colour legend title
+  theme_classic()
+```
+
+What relationships do we see with the caretaker of each tree?
+
+First, use `count()` to create a contingency table that tabulates the number of counts `n` of caretakers grouped by `legal_status`. Then, since there is already an `n` column, pipe this into `add_count()`. The `add_count()` function is a combination of `group_by()` (here, grouping by caretaker) and `add_tally()` (counting the `n` number of caretakers within each caretaker group). Note that the column `n` is still hanging around. So, `caretaker_count` is the total tally of that group of caretakers, while `n` groups by `caretakers` and `legal_status`. Without using `(wt = n)`, only the number of rows for each caretaker would be counted (i.e., the number of different `legal_status` statuses).
+
+Then, filter only cases where the `caretaker_count` is greater than 50. Group by `legal_status`, and create a `percent_legal` column that that calculates the percentage of caretakers, separated by legal status.
+
+Create a vertical bar graph using the new `percent_legal` column.
+
+```{r}
+trees %>% 
+  
+  # create contingency table of `caretaker` and `legal_status`
+  count(legal_status, caretaker) %>% 
+  
+  # add the weighted count of each caretaker as a column named `caretaker_count`
+  add_count(caretaker, wt = n, name = "caretaker_count") %>% 
+  
+  # filter by cases with caretaker > 50
+  filter(caretaker_count > 50) %>% 
+  
+  # calculate percentage of caretakers for each `legal_status`
+  group_by(legal_status) %>% 
+  mutate(percent_legal = n / sum(n)) %>% 
+  
+  # create bar graph
+  ggplot(aes(x = percent_legal, y = caretaker, fill = legal_status)) +
+  geom_col(position = "dodge") +
+  labs(fill = NULL, # remove fill legend title
+       x = "% of trees grouped by legal status") +
+  theme_classic()
+```
+
+From the bar graph, some things can be noticed. First, a lot of caretakers are private, and there are about twice as many private caretakers that maintain trees with the legal status of "other" than the DPW maintained status. Trees in DPW-maintained areas are split between private caretakers and DPW caretakers (naturally).
+
+# Build Model
+
+This was done using the `tidymodels` package.
+
+First, split the data into training and testing sets. The function `initial_split()` creates a single binary split of the data into training and testing sets, and `strata` indicates the variable that was used to stratify the sampling. I assigned the training data to the data frame `trees_train` and the testing data to the data frame `trees_test`
+
+```{r}
+set.seed(1)
+trees_split <- initial_split(trees, strata = legal_status)
+trees_train <- training(trees_split)
+trees_test <- testing(trees_split)
+```
+
+The recipe for data preprocessing is:
+
+1. Tell the `recipe()` what the model is going to be, using a formula, and what our training data is
+  - recall the goal of predicting which trees are maintained by DPW
+  - that means that we are predicting `legal_status` using various other variables
+2. Update the role for `tree_id` (useful to keep to identify rows, but neither predictor nor outcome)
+3. Use `step_other()` to collapse categorical levels for species, caretaker, and site
+  - potentially reduces the variables if they are occur infrequently
+  - `threshold` indicates the threshold rate of occurrence at which factor levels lower will be "othered" and reduced
+4. Create a new variable for year (removing `date` variable) to fit model
+  - use `step_dummy` to convert nominal-type variables into numeric binary (removing all outcome variables)
+  - use `step_date` to convert date data into the factor "year"
+5. Downsample DPW Maintain since there are many more DPW-maintained trees than not.
+  - remove rows to make equal the occurrence of levels in a specific factor level
+
+
+Now, I am creating two recipe objects using the recipe that was specified above:
+
+- `tree-rec` has not been trained on data yet
+- `tree_prep` has been trained on data
+  - use `prep()` function to train a data recipe
+
+Use `juice` to extract finalized training set.
+
+```{r tree_rec}
+tree_rec <-
+  # recipe
+  recipe(legal_status ~ ., data = trees_train) %>% 
+  
+  # alter role of `tree_id` as an "ID" instead of "predictor"
+  update_role(tree_id, new_role = "ID") %>% 
+  
+  # collapse categorical levels
+  step_other(species, caretaker, threshold = 0.01) %>% 
+  step_other(site_info, threshold = 0.005) %>% 
+  
+  # new variable for year
+  step_dummy(all_nominal(), -all_outcomes()) %>% 
+  step_date(date, features = c("year")) %>% 
+  step_rm(date) %>% 
+  
+  # downsample
+  step_downsample(legal_status)
+```
+
+```{r tree_prep}
+tree_prep <- prep(tree_rec)
+```
+
+```{r juice}
+juiced <- juice(tree_prep)
+```
+
+Create model specifications for a random forest by tuning the hyperparameters 
+
+- `mtry`: number of predictors to sample at each split
+- `min_n`: number of observations needed to keep splitting nodes
+
+Pipe this to `set_mode()` (to set the model's model to "classification") and `set_engine()` (to set the computational engine).
+
+```{r}
+tune_spec <- rand_forest(
+  
+  # number of predictors that will be randomly sampled
+  mtry = tune(),
+  
+  # number of trees
+  trees = 1000, 
+  
+  # minimum number of data points
+  min_n = tune()
+) %>% 
+  
+  set_mode("classification") %>% 
+  set_engine("ranger")
+```
+
+
+Lastly, put everything into a `workflow()` to create a convenient object that carries the models. 
+
+```{r}
+tree_wf <- workflow() %>%
+  add_recipe(tree_rec) %>%
+  add_model(tune_spec)
+```
+# Train hyperparameters
+
+https://juliasilge.com/blog/sf-trees-random-tuning/#train-hyperparameters
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
