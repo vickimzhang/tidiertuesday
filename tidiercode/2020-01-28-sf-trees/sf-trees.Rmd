@@ -12,14 +12,20 @@ output:
       df_print: paged
       code_folding: show
 ---
-# Set Up
-
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = FALSE, warning = FALSE)
 ```
 
+
+# Introduction
+
+I learn more stats!
+
+This [data set](https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2020/2020-01-28/sf_trees.csv) contains information on tree species, their locations (address, latitude, and longitude), the date it was planted, some of it's measurements, and other variables. Some of the data is missing (obviously). I really like this data set because it's huge, and it's messy.
+
 ```{r packages}
-# library(tidyverse)
+library(tidyverse)
+library(naniar)
 ```
 
  
@@ -27,9 +33,9 @@ knitr::opts_chunk$set(echo = FALSE, warning = FALSE)
 # sf_trees <- readr::read_csv('https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2020/2020-01-28/sf_trees.csv')
 ```
 
-# Introduction
+# Explore the data
 
-The data set contains information on tree species, their locations (address, latitude, and longitude), the date it was planted, some of it's measurements, and other variables. Some of the data is missing (obviously).
+To explore the data, I followed the first parts of Julia Silge's tutorial [Tuning random forest hyperparameters with #TidyTuesday trees data](https://juliasilge.com/blog/sf-trees-random-tuning/).There are a lot of variables, and the data ain't clean.
 
 ```{r}
 glimpse(sf_trees)
@@ -37,94 +43,105 @@ sf_trees
 ```
 
 
+## Clean
 
-
-# Cleaning: Removing NAs
-
-In a new data frame `trees`, I remove first removed `tree_id` (a unique identifier).
+First, variables. Code all cases where `legal_status` is not "DPW Maintained" as "Other". Then, use `parse_number()` to get a rough estimate of the size of the plot from the `plot_size` column. Next, remove the `address` variable (redundant info as there is also the more accurate lat/long). Finally, change all character variables to factor.
 
 ```{r}
 trees <- sf_trees %>% 
-  select(-tree_id) 
-```
-
-## Missing Species
-
-There are 192,987 trees of 571 species. Some of them are hybrids (e.g., Acer x), some are locally adapted (e.g., *Prunus cerasifera* and *Prunus serrulata* types), some are missing genus and/or family names. It appears that subspecies are mostly grouped together. There is a whole group of `Tree(s)::` and `::` that must have not been identified.
-
-```{r}
-nrow(trees)
-trees %>% 
-  group_by(species) %>%
-  tally()
-```
-
-The `species` variable is pretty complicated and messy. First, I remove all the cases where there was no species recorded. I am sorry to exclude those trees but if we don't know the species, the observation is not useful to us at all. This leaves us with 179,519 trees of 569 species.
-
-```{r}
-trees <- trees %>% 
-  filter(species != "::" & species != "Tree(s) ::")
-```
-
-
-## Missing Location
-
-The variables for location are gross. Looking at the combination of `address`, `latitude` and `longitude` variables, there is some redundancy. The variable `address` is not as accurate as the combination of `latitude` and `longitude`. However, there are also some trees that only have an address and no lat/long. After a long period of pondering, I decided to remove all instances of missing `latitude` and `longitude` and get rid of the `address` variable altogether. I could supplement missing lat/long accessions using Google Earth but it would not be accurate. Is there even a package that can retrieve lat/long given an address input? 
-
-```{r}
-trees %>% 
-  group_by(address, latitude, longitude) %>% 
-  tally()
-```
-
-First, I checked up on the observations that do not have `address`, `latitude` or `longitude`. There were 1566 individual trees. I had to make them leaf (ha).
-
-```{r}
-trees <- trees %>% 
+  mutate(
+    
+    # mutate so that `legal_status` is either "DPW Maintained" or "Other"
+    legal_status = case_when(
+      legal_status == "DPW Maintained" ~ legal_status,
+      TRUE ~ "Other"
+    ),
+    
+    # parse the `plot_size` to a number
+    plot_size = parse_number(plot_size)
+  ) %>% 
+  
+  # remove address
   select(-address) %>% 
-  filter(!is.na(latitude)) %>% 
-  filter(!is.na(longitude))
+  
+  
+  # character to factor
+  mutate_if(is.character, factor)
 ```
+## NAs
 
-
-## Missing tree measurements
-
-Okay, now removing missing tree measurements. Trees were measured using the variable `dbh`, which measured the diameter of the tree at breast height.
+Before removing any NAs, let's just check them.
 
 ```{r}
-trees <- trees %>%
-  filter(!is.na(dbh))
+# visualize
+vis_miss(trees, warn_large_data = FALSE)
+
+# missing data summaries for each variable
+miss_var_summary(trees)
+
+# span of missing data by `date` and `plot_size`
+miss_var_span(trees, var = date, span_every = 5000)
+miss_var_span(trees, var = plot_size, span_every = 5000)
 ```
 
+About 11% of the data is missing, spread across the 6 out of the 11 variables. The majority of these NAs are missing `date` and `plot_size`. Most of the later `date` values are missing, while most of the earlier `plot_size` values are missing.
 
-## Other missing data
-
-What about `legal_status`, `plot_size` or `site_info`? Are there any missing observations here? These variables might not be useful for our analyses, so let's remove the `site_info` variable, and let's remove the individuals with missing `legal_status` and `plot_size.
+Remove all NAs.
 
 ```{r}
 trees <- trees %>% 
-  filter(!is.na(legal_status)) %>% 
-  filter(!is.na(plot_size)) %>% 
-  select(-site_info)
+  na.omit()
 ```
 
+## Exploratory Data Analysis
 
-## Cleaning Variables
+*How are the trees distributed across San Fran?*
 
-There are several messy columns that will probably cause me quite a bit of grief. First is the `species` column.
+This is cool - plot `latitude` and `longitude` without needing to draw it over a map. Obviously it is missing some attributes (e.g., scale), but it does give a brief visualization and shows obvious streets.
 
 ```{r}
 trees %>% 
-  group_by(species) %>% 
-  tally()
+  ggplot(aes(x = longitude, y = latitude, colour = legal_status)) + 
+  geom_point(size = 0.5, alpha = 0.5) +
+  labs(colour = NULL) + # remove colour legend title
+  theme_classic()
+```
+*What relationships do we see with the caretaker of each tree?*
+
+First, use `count()` to create a contingency table that tabulates the number of counts `n` of caretakers grouped by `legal_status`. Then, since there is already an `n` column, pipe this into `add_count()`. The `add_count()` function is a combination of `group_by()` (here, grouping by caretaker) and `add_tally()` (counting the `n` number of caretakers within each caretaker group). Note that the column `n` is still hanging around. So, `caretaker_count` is the total tally of that group of caretakers, while `n` groups by `caretakers` and `legal_status`. Without using `(wt = n)`, only the number of rows for each caretaker would be counted (i.e., the number of different `legal_status` statuses).
+
+Then, filter only cases where the `caretaker_count` is greater than 50. Group by `legal_status`, and create a `percent_legal` column that that calculates the percentage of caretakers, separated by legal status.
+
+Create a vertical bar graph using the new `percent_legal` column.
+
+```{r}
+trees %>% 
+  
+  # create contingency table of `caretaker` and `legal_status`
+  count(legal_status, caretaker) %>% 
+  
+  # add the weighted count of each caretaker as a column named `caretaker_count`
+  add_count(caretaker, wt = n, name = "caretaker_count") %>% 
+  
+  # filter by cases with caretaker > 50
+  filter(caretaker_count > 50) %>% 
+  
+  # calculate percentage of caretakers for each `legal_status`
+  group_by(legal_status) %>% 
+  mutate(percent_legal = n / sum(n)) %>% 
+  
+  # create bar graph
+  ggplot(aes(x = percent_legal, y = caretaker, fill = legal_status)) +
+  geom_col(position = "dodge") +
+  labs(fill = NULL, # remove fill legend title
+       x = "% of trees grouped by legal status") +
+  theme_classic()
 ```
 
+From the bar graph, some things can be noticed. First, a lot of caretakers are private, and there are about twice as many private caretakers that maintain trees with the legal status of "other" than the DPW maintained status. Trees in DPW-maintained areas are split between private caretakers and DPW caretakers (naturally).
 
 
-
-
-
-
+# 
 
 
 

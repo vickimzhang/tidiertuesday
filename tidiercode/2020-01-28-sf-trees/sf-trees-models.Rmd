@@ -22,8 +22,7 @@ knitr::opts_chunk$set(echo = FALSE, warning = FALSE)
 
 I learn more stats!
 
-This [data set](https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2020/2020-01-28/sf_trees.csv) contains information on tree species, their locations (address, latitude, and longitude), the date it was planted, some of it's measurements, and other variables. Some of the data is missing (obviously). I really like this data set because it's huge, it's messy, and it models trees! 
-
+I model trees using a tree [data set](https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2020/2020-01-28/sf_trees.csv).
 ```{r packages}
 library(tidyverse)
 library(tidymodels)
@@ -31,7 +30,7 @@ library(workflows)
 ```
  
 ```{r data}
-# sf_trees <- readr::read_csv('https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2020/2020-01-28/sf_trees.csv')
+sf_trees <- readr::read_csv('https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2020/2020-01-28/sf_trees.csv')
 ```
 
 I followed Julia Silge's tutorial [Tuning random forest hyperparameters with #TidyTuesday trees data](https://juliasilge.com/blog/sf-trees-random-tuning/). Here, I am replicating most of the modeling code to learn how to create a random forest model (which I have read about but never built), in addition to exploring large data sets. The goal here is to familiarize myself with the method and statistics so that I know how to use it in the future.
@@ -40,21 +39,11 @@ Random Forests is a machine learning process, based on generating a large number
 
 Goal: build a model to predict which trees are maintained by the San Francisco Department of Public Works, and which are not.
 
-# Explore the data
 
-There are a lot of variables, and the data ain't clean.
 
-```{r}
-glimpse(sf_trees)
-sf_trees
-```
-## Clean
+# Build Model
 
-First, mutate the variables. Code all cases where `legal_status` is not "DPW Maintained" as "Other". Then, use `parse_number()` to get a rough estimate of the size of the plot from the `plot_size` column.
-
-Next, remove the `address` variable (redundant info as there is also the more accurate lat/long), and remove all NAs.
-
-Finally, change all character variables to factor.
+First, I cleaned the data frame.
 
 ```{r}
 trees <- sf_trees %>% 
@@ -79,54 +68,6 @@ trees <- sf_trees %>%
   # character to factor
   mutate_if(is.character, factor)
 ```
-
-## Exploratory Data Analysis
-
-How are the trees distributed across San Fran? This is cool - you can plot `latitude` and `longitude` without needing to draw it over a map. Obviously it is  missing some attributes (e.g., scale), but it does give a brief visualization and shows obvious streets.
-
-```{r}
-trees %>% 
-  ggplot(aes(x = longitude, y = latitude, colour = legal_status)) + 
-  geom_point(size = 0.5, alpha = 0.4) +
-  labs(colour = NULL) + # remove colour legend title
-  theme_classic()
-```
-
-What relationships do we see with the caretaker of each tree?
-
-First, use `count()` to create a contingency table that tabulates the number of counts `n` of caretakers grouped by `legal_status`. Then, since there is already an `n` column, pipe this into `add_count()`. The `add_count()` function is a combination of `group_by()` (here, grouping by caretaker) and `add_tally()` (counting the `n` number of caretakers within each caretaker group). Note that the column `n` is still hanging around. So, `caretaker_count` is the total tally of that group of caretakers, while `n` groups by `caretakers` and `legal_status`. Without using `(wt = n)`, only the number of rows for each caretaker would be counted (i.e., the number of different `legal_status` statuses).
-
-Then, filter only cases where the `caretaker_count` is greater than 50. Group by `legal_status`, and create a `percent_legal` column that that calculates the percentage of caretakers, separated by legal status.
-
-Create a vertical bar graph using the new `percent_legal` column.
-
-```{r}
-trees %>% 
-  
-  # create contingency table of `caretaker` and `legal_status`
-  count(legal_status, caretaker) %>% 
-  
-  # add the weighted count of each caretaker as a column named `caretaker_count`
-  add_count(caretaker, wt = n, name = "caretaker_count") %>% 
-  
-  # filter by cases with caretaker > 50
-  filter(caretaker_count > 50) %>% 
-  
-  # calculate percentage of caretakers for each `legal_status`
-  group_by(legal_status) %>% 
-  mutate(percent_legal = n / sum(n)) %>% 
-  
-  # create bar graph
-  ggplot(aes(x = percent_legal, y = caretaker, fill = legal_status)) +
-  geom_col(position = "dodge") +
-  labs(fill = NULL, # remove fill legend title
-       x = "% of trees grouped by legal status") +
-  theme_classic()
-```
-
-From the bar graph, some things can be noticed. First, a lot of caretakers are private, and there are about twice as many private caretakers that maintain trees with the legal status of "other" than the DPW maintained status. Trees in DPW-maintained areas are split between private caretakers and DPW caretakers (naturally).
-
-# Build Model
 
 This was done using the `tidymodels` package.
 
@@ -224,7 +165,11 @@ tree_wf <- workflow() %>%
   add_recipe(tree_rec) %>%
   add_model(tune_spec)
 ```
+
+
 # Train hyperparameters
+
+(wip)
 
 https://juliasilge.com/blog/sf-trees-random-tuning/#train-hyperparameters
 
